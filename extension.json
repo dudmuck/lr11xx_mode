@@ -1,0 +1,13 @@
+{
+  "name": "lr11xx_mode",
+  "apiVersion": "1.0.0",
+  "author": "Wayne Roberts",
+  "version": "0.1.0",
+  "description": "LR11xx SPI parser",
+  "extensions": {
+    "lr11xx_mode": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "HighLevelAnalyzer.Hla"
+    }
+  }
+}
