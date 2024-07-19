@@ -13,6 +13,8 @@ RADIO_SET_TX         = 0x020a
 RADIO_SET_STANDBY    = 0x011c
 RADIO_SET_SLEEP      = 0x011b
 RADIO_SETDIOIRQPARAMS = 0x0113
+RADIO_GNSS_SCAN     = 0x040b
+RADIO_WIFI_SCAN     = 0x0301
 
 class RadioOpMode(Enum):
     NONE = 0,
@@ -81,6 +83,8 @@ class Hla(HighLevelAnalyzer):
         RADIO_SET_STANDBY: "setStandby",
         RADIO_SET_SLEEP: "setSleep",
         RADIO_SETDIOIRQPARAMS: "setDioIrqParams",
+        RADIO_GNSS_SCAN: "GnssScan",
+        RADIO_WIFI_SCAN: "WifiScanTimeLimit",
     }
 
     def parseStatus_to_af(self, arg, frame: AnalyzerFrame, cmd):
@@ -120,9 +124,34 @@ class Hla(HighLevelAnalyzer):
             my_ret = AnalyzerFrame('stbyXosc', self.mode_start_at, self.nss_fall_time, {'string':"STBY_XOSC " + dur_ms_str})
             self.mode_start_at = self.nss_fall_time
 
-        #if self.mode == RadioOpMode.STANDBY_RC and stat2.chipMode != 1:  # is this happening?
+        if self.mode == RadioOpMode.SNIFF and stat2.chipMode != 6:
+            dur_ms = float(self.nss_fall_time - self.mode_start_at) * 1000
+            dur_ms_str = f"{dur_ms:.5f}" + "ms"
+            my_ret = AnalyzerFrame('sniffEnd', self.mode_start_at, self.nss_fall_time, {'string':"SNIFF " + dur_ms_str})
+            self.mode_start_at = self.nss_fall_time
 
-        if cmd == RADIO_SET_RX or cmd == RADIO_SET_TX:
+        #if self.mode == RadioOpMode.STANDBY_RC and stat2.chipMode != 1:  # is this happening?
+        commanded_mode = RadioOpMode.NONE
+
+        if cmd == RADIO_SET_RX:
+            commanded_mode = RadioOpMode.RX
+        elif cmd == RADIO_SET_TX:
+            commanded_mode  = RadioOpMode.TX
+        elif cmd == RADIO_SET_STANDBY:
+            cfg = self.ba_mosi[2]
+            if cfg == 0:
+                commanded_mode = RadioOpMode.STANDBY_RC
+            elif cfg == 1:
+                commanded_mode = RadioOpMode.STANDBY_XOSC
+            else:
+                print('SetStandby ? ' + hex(cfg) + ' ?')
+        elif cmd == RADIO_SET_SLEEP:
+            commanded_mode = RadioOpMode.SLEEP
+            self.sleep_cfg.asByte = self.ba_mosi[2]
+        elif cmd == RADIO_GNSS_SCAN or cmd == RADIO_WIFI_SCAN:
+            commanded_mode = RadioOpMode.SNIFF
+
+        if commanded_mode != RadioOpMode.NONE:  # host send opcode which changes radio operating mode
             cmd_str = self.cmdDict[cmd]
             if self.mode == RadioOpMode.STANDBY_XOSC:
                 dur_ms = float(frame.end_time - self.mode_start_at) * 1000
@@ -140,61 +169,14 @@ class Hla(HighLevelAnalyzer):
                 dur_ms = float(frame.end_time - self.mode_start_at) * 1000
                 dur_ms_str = f"{dur_ms:.5f}" + "ms"
                 my_ret = AnalyzerFrame('rxEnd', self.mode_start_at, frame.end_time, {'string':"RX " + dur_ms_str + " cmd=" + cmd_str})
-            else:
-                print("TODO SET_RX/TX at mode " + str(self.mode) + " " + str(self.foobar))
-            if cmd == RADIO_SET_RX:
-                self.mode = RadioOpMode.RX
-            elif cmd == RADIO_SET_TX:
-                self.mode = RadioOpMode.TX
-            self.mode_start_at = frame.end_time
-            return my_ret
-        elif cmd == RADIO_SET_STANDBY:
-            cfg = self.ba_mosi[2]
-            if self.mode == RadioOpMode.STANDBY_RC:
-                if self.mode_start_at != 0:
-                    dur_ms = float(frame.end_time - self.mode_start_at) * 1000
-                    dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                    my_ret = AnalyzerFrame('stbyRc', self.mode_start_at, frame.end_time, {'string':"STBY_RC " + dur_ms_str})
-            elif self.mode == RadioOpMode.STANDBY_XOSC:
-                dur_ms = float(frame.end_time - self.mode_start_at) * 1000
-                dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                my_ret = AnalyzerFrame('stbyXosc', self.mode_start_at, frame.end_time, {'string':"STBY_XOSC " + dur_ms_str})
-            elif self.mode == RadioOpMode.RX:
-                dur_ms = float(frame.end_time - self.mode_start_at) * 1000
-                dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                my_ret = AnalyzerFrame('rxEnd', self.mode_start_at, frame.end_time, {'string':"RX manual-shutoff " + dur_ms_str})
             elif self.mode == RadioOpMode.WAKEUP:
                 dur_ms = float(frame.end_time - self.mode_start_at) * 1000
                 dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                my_ret = AnalyzerFrame('wake', self.mode_start_at, frame.end_time, {'string':"___ cmd-stdby-wake ___" + dur_ms_str})
+                my_ret = AnalyzerFrame('wakeB', self.mode_start_at, frame.end_time, {'string':"___ cmd-stdby-wake ___" + dur_ms_str})
             else:
-                print("set standby TODO for mode " + str(self.mode))
+                print("TODO SET_RX/TX at mode " + str(self.mode) + " " + str(self.foobar))
+            self.mode = commanded_mode
             self.mode_start_at = frame.end_time
-            if cfg == 0:
-                self.mode = RadioOpMode.STANDBY_RC
-            elif cfg == 1:
-                self.mode = RadioOpMode.STANDBY_XOSC
-            else:
-                print('SetStandby ? ' + hex(cfg) + ' ?')
-            return my_ret
-        elif cmd == RADIO_SET_SLEEP:
-            if self.mode == RadioOpMode.STANDBY_XOSC:
-                dur_ms = float(frame.end_time - self.mode_start_at) * 1000
-                dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                my_ret = AnalyzerFrame('stbyXosc', self.mode_start_at, frame.end_time, {'string':"STBY_XOSC " + dur_ms_str})
-            elif self.mode == RadioOpMode.STANDBY_RC:
-                dur_ms = float(frame.end_time - self.mode_start_at) * 1000
-                dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                my_ret = AnalyzerFrame('stbyRc', self.mode_start_at, frame.end_time, {'string':"STBY_RC " + dur_ms_str})
-            elif self.mode == RadioOpMode.RX:
-                dur_ms = float(frame.end_time - self.mode_start_at) * 1000
-                dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                my_ret = AnalyzerFrame('rxEnd', self.mode_start_at, frame.end_time, {'string':"RX " + dur_ms_str})
-            else:
-                print("set sleep TODO for mode " + str(self.mode))
-            self.mode = RadioOpMode.SLEEP
-            self.mode_start_at = frame.end_time
-            self.sleep_cfg.asByte = self.ba_mosi[2]
             return my_ret
 
         if self.mode == RadioOpMode.STANDBY_RC and stat2.chipMode != 1:
@@ -238,14 +220,16 @@ class Hla(HighLevelAnalyzer):
             'format': 'Output type: {{type}}, Input type: {{data.input_type}}'
         },
         'match': { 'format': '{{data.string}}'},
-        'wake': { 'format': '{{data.string}}'},
+        'wakeA': { 'format': '{{data.string}}'},
+        'wakeB': { 'format': '{{data.string}}'},
         'sleepEnd': { 'format': '{{data.string}}'},
         'stbyRc': { 'format': '{{data.string}}'},
         'stbyXosc': { 'format': '{{data.string}}'},
         'fs': { 'format': '{{data.string}}'},
         'fsEnd': { 'format': '{{data.string}}'},
         'rxEnd': { 'format': '{{data.string}}'},
-        'txEnd': { 'format': '{{data.string}}'}
+        'txEnd': { 'format': '{{data.string}}'},
+        'sniffEnd': { 'format': '{{data.string}}'}
     }
 
     def __init__(self):
@@ -271,7 +255,7 @@ class Hla(HighLevelAnalyzer):
             if self.mode == RadioOpMode.WAKEUP:
                 dur_ms = float(frame.start_time - self.mode_start_at) * 1000
                 dur_ms_str = f"{dur_ms:.5f}" + "ms"
-                my_ret = AnalyzerFrame('wake', self.mode_start_at, frame.start_time, {'string':"wakeup " + dur_ms_str})
+                my_ret = AnalyzerFrame('wakeA', self.mode_start_at, frame.start_time, {'string':"wakeup " + dur_ms_str})
                 self.mode_start_at = frame.start_time
 
             self.ba_mosi = b''
